@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+// zshrc-tui 入口：不加指令開 TUI，其餘是非互動子指令（說明見 lib/strings.mjs 的 usage）。
+import { getSecret } from "../lib/keychain.mjs";
+import { isValidName } from "../lib/paths.mjs";
+import { assertMac, listEntries, removeEntry, saveEntry } from "../lib/store.mjs";
+import { MSG } from "../lib/strings.mjs";
+import { runTui } from "../lib/tui.mjs";
+import { install, uninstall } from "../lib/zshrc.mjs";
+
+function requireName(name) {
+	if (!name) throw new Error(MSG.missingName);
+	if (!isValidName(name)) throw new Error(MSG.invalidName(name));
+	return name;
+}
+
+/** 終端機上逐字讀取且不回顯；非終端機（管線）就讀完整個 stdin。結尾換行會去掉。 */
+async function readValue(name) {
+	const stdin = process.stdin;
+	if (!stdin.isTTY) {
+		let data = "";
+		for await (const chunk of stdin) data += chunk;
+		return data.replace(/\r?\n$/, "");
+	}
+	process.stderr.write(MSG.promptValue(name));
+	stdin.setRawMode(true);
+	stdin.setEncoding("utf-8");
+	return new Promise((resolve, reject) => {
+		let value = "";
+		const onData = (chunk) => {
+			for (const ch of chunk) {
+				if (ch === "\r" || ch === "\n") {
+					done();
+					return resolve(value);
+				}
+				if (ch === "\x03") {
+					done();
+					return reject(new Error(MSG.tuiCancelled));
+				}
+				if (ch === "\x7f" || ch === "\b") value = value.slice(0, -1);
+				else if (ch >= " ") value += ch;
+			}
+		};
+		const done = () => {
+			stdin.off("data", onData);
+			stdin.setRawMode(false);
+			stdin.pause();
+			process.stderr.write("\n");
+		};
+		stdin.on("data", onData);
+		stdin.resume();
+	});
+}
+
+async function main([cmd, name]) {
+	if (cmd === "help" || cmd === "-h" || cmd === "--help") return console.log(MSG.usage);
+	assertMac();
+	switch (cmd) {
+		case undefined:
+			return runTui();
+		case "list": {
+			const entries = listEntries();
+			if (entries.length === 0) return console.log(MSG.listEmpty);
+			for (const e of entries) {
+				const flags = [e.stored ? MSG.statusStored : MSG.statusMissing, e.inShell ? MSG.statusShell : ""];
+				console.log(`${e.name}\t${flags.filter(Boolean).join("，")}`);
+			}
+			return;
+		}
+		case "set": {
+			requireName(name);
+			saveEntry(name, await readValue(name));
+			return console.error(`${MSG.saved(name)}，${MSG.applyHint}`);
+		}
+		case "get": {
+			const value = getSecret(requireName(name));
+			if (value === null) throw new Error(MSG.notFound(name));
+			return process.stdout.write(`${value}\n`);
+		}
+		case "rm":
+			removeEntry(requireName(name));
+			return console.error(MSG.deleted(name));
+		case "install":
+			return console.log(install());
+		case "uninstall":
+			return console.log(uninstall());
+		default:
+			throw new Error(`${MSG.unknownCommand(cmd)}\n\n${MSG.usage}`);
+	}
+}
+
+main(process.argv.slice(2)).catch((error) => {
+	console.error(error.message);
+	process.exit(1);
+});
