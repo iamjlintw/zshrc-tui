@@ -2,7 +2,6 @@
   "name": "zshrc-tui",
   "version": "0.1.0",
   "description": "把環境變數的 key/value 存進 macOS Keychain，開 shell 時單向同步成環境變數的 TUI 設定器",
-  "private": true,
   "license": "MIT",
   "type": "module",
   "bin": {
